@@ -25,12 +25,10 @@ function handleEventStream(url: string) {
 		const source = new EventSource(url)
 
 		yield fork(function* () {
-			const ch = establish(source)
+			const ch = event(source, "error")
 			while (true) {
-				const { data } = yield take(ch)
-				console.log("establish")
-				axios.defaults.headers.common["X-Source-Id"] = data
-				yield put(ac.establishEventStream(source))
+				yield take(ch)
+				yield put(ac.errorEventStream())
 			}
 		})
 
@@ -54,10 +52,11 @@ function handleEventStream(url: string) {
 				}),
 			]
 
-			const ch = event(source, "error")
+			const ch = establish(source)
 			while (true) {
-				yield take(ch)
-				yield put(ac.errorEventStream())
+				const { data } = yield take(ch)
+				axios.defaults.headers.common["X-Source-Id"] = data
+				yield put(ac.establishEventStream(source))
 			}
 		} finally {
 			if (cancelled()) {
