@@ -173,6 +173,7 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 			header := w.Header()
 			header.Set("Cache-Control", "no-store")
 			header.Set("Content-Type", "text/event-stream")
+			header.Set("Connection", "keep-alive")
 			c.Render(http.StatusOK, sse.Event{Event: "establish", Retry: 3000, Data: sourceKey})
 			w.Flush()
 
