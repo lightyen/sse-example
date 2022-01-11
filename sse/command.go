@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
@@ -148,7 +149,7 @@ func (t *SingleCommandInstance) runCommand(ctx context.Context, name string, arg
 	for {
 		n, err := cmdReader.Read(buf)
 		if n > 0 {
-			send(string(buf[:n]))
+			send(strings.Replace(string(buf[:n]), "\r\n", "\n", -1))
 		}
 		if err != nil {
 			if err != io.EOF {
