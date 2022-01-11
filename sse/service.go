@@ -235,8 +235,7 @@ func (s *EventService) Peers() []PeerInfo {
 }
 
 type SourceInfo struct {
-	ID       interface{} `json:"id"`
-	ClientIP string      `json:"ip"`
+	ID interface{} `json:"id"`
 }
 
 func (s *EventService) Sources() []SourceInfo {
@@ -245,7 +244,7 @@ func (s *EventService) Sources() []SourceInfo {
 		peer, _ := value.(*Peer)
 		peer.sources.Range(func(key, value interface{}) bool {
 			source, _ := value.(*Source)
-			items = append(items, SourceInfo{ID: source.key, ClientIP: peer.clientIP})
+			items = append(items, SourceInfo{ID: source.key})
 			return true
 		})
 		return true
