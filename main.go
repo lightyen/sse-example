@@ -56,8 +56,9 @@ func main() {
 	)
 
 	srv := http.Server{
-		Addr:    ":8080",
-		Handler: e,
+		Addr:         ":8080",
+		Handler:      e,
+		WriteTimeout: 0,
 	}
 
 	go func() {
