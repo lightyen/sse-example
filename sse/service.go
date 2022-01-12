@@ -95,8 +95,10 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 			}
 
 			peerKey := peerKeyFunc(c)
-			u := uuid.New()
-			sourceKey := u.String()
+			sourceKey := sourceKeyFunc(c)
+			if sourceKey == "" {
+				sourceKey = uuid.New().String()
+			}
 
 			ch := make(chan sse.Event, 1)
 			ctx, cancel := context.WithCancel(c)
