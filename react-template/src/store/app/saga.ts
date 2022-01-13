@@ -13,13 +13,6 @@ function event(source: EventSource, event: string) {
 	})
 }
 
-function establish(source: EventSource) {
-	return eventChannel(emit => {
-		source.addEventListener("establish", e => emit(e))
-		return () => void 0
-	})
-}
-
 function handleEventStream(url: string) {
 	return fork(function* () {
 		const source = new EventSource(url)
@@ -39,8 +32,8 @@ function handleEventStream(url: string) {
 				yield fork(function* () {
 					const ch = event(source, "command")
 					while (true) {
-						const { data, lastEventId } = yield take(ch)
-						yield put(ac.eCommand(lastEventId, data))
+						const { data } = yield take(ch)
+						yield put(ac.eCommand(data))
 					}
 				}),
 				yield fork(function* () {
@@ -52,10 +45,10 @@ function handleEventStream(url: string) {
 				}),
 			]
 
-			const ch = establish(source)
+			const ch = event(source, "establish")
 			while (true) {
-				const { data } = yield take(ch)
-				axios.defaults.headers.common["X-Source-Id"] = data
+				const { lastEventId } = yield take(ch)
+				axios.defaults.headers.common["Last-Event-ID"] = lastEventId
 				yield put(ac.establishEventStream(source))
 			}
 		} finally {

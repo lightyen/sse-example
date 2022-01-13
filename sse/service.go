@@ -74,10 +74,10 @@ func (s *EventService) CloseAll() {
 
 func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin) *EventService {
 	peerKeyFunc := func(c *gin.Context) string {
-		return "user-id-1234"
+		return c.GetHeader("X-Peer-ID")
 	}
 	sourceKeyFunc := func(c *gin.Context) string {
-		return c.GetHeader("X-Source-Id")
+		return c.GetHeader("Last-Event-ID")
 	}
 
 	s := &EventService{peerKeyFunc: peerKeyFunc, sourceKeyFunc: sourceKeyFunc, peers: &sync.Map{}}
@@ -176,7 +176,7 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 			header.Set("Cache-Control", "no-store")
 			header.Set("Content-Type", "text/event-stream")
 			header.Set("Connection", "keep-alive")
-			c.Render(http.StatusOK, sse.Event{Event: "establish", Retry: 3000, Data: sourceKey})
+			c.Render(http.StatusOK, sse.Event{Event: "establish", Retry: 3000, Id: sourceKey, Data: sourceKey})
 			w.Flush()
 
 			for {

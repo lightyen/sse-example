@@ -14,9 +14,7 @@ export const command = createAction("COMMAND", (name: string, args: string[]) =>
 	}
 })
 
-export const eCommand = createAction("event_command", (id: string, data: string) => {
-	return { payload: { id, data } }
-})
+export const eCommand = createAction("event_command", (payload: string) => ({ payload }))
 
 export const eCount = createAction("event_count", (data: string) => {
 	return { payload: data }

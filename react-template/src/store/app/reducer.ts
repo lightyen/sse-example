@@ -21,14 +21,11 @@ export const app = createReducer(init, builder =>
 		.addCase(ac.closeEventStream, state => {
 			state.source = undefined
 		})
+		.addCase(ac.command, state => {
+			state.data = []
+		})
 		.addCase(ac.eCommand, (state, { payload }) => {
-			const id = parseInt(payload.id)
-			if (state.lastEventId < id) {
-				state.data = [payload.data]
-				state.lastEventId = id
-			} else if (state.lastEventId === id) {
-				state.data = state.data.concat(payload.data)
-			}
+			state.data = state.data.concat(payload)
 		})
 		.addCase(ac.eCount, (state, { payload }) => {
 			state.count = payload
