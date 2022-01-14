@@ -136,24 +136,24 @@ func (t *SingleCommandInstance) runCommand(ctx context.Context, name string, arg
 	}
 	cmd.Stderr = cmd.Stdout
 	if err = cmd.Start(); err != nil {
-		send(err.Error())
+		_ = send(err.Error())
 		return
 	}
 	defer func() {
 		var e *exec.ExitError
 		if err := cmd.Wait(); err != nil && !errors.As(err, &e) {
-			send(err.Error())
+			_ = send(err.Error())
 		}
 	}()
 	buf := make([]byte, 256)
 	for {
 		n, err := cmdReader.Read(buf)
 		if n > 0 {
-			send(strings.Replace(string(buf[:n]), "\r\n", "\n", -1))
+			_ = send(strings.Replace(string(buf[:n]), "\r\n", "\n", -1))
 		}
 		if err != nil {
 			if err != io.EOF {
-				send(err.Error())
+				_ = send(err.Error())
 			}
 			return
 		}

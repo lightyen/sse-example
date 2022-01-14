@@ -41,20 +41,16 @@ func (s *EventService) Source(c *gin.Context) *Source {
 
 func (s *EventService) Send(key interface{}, e sse.Event) {
 	if v, ok := s.peers.Load(key); ok {
-		if peer, ok := v.(*Peer); ok {
-			if ok := peer.Send(e); !ok {
-				s.peers.Delete(key)
-			}
+		if peer, ok := v.(Sender); ok {
+			_ = peer.Send(e)
 		}
 	}
 }
 
 func (s *EventService) Broadcast(e sse.Event) {
 	s.peers.Range(func(key, value interface{}) bool {
-		if peer, ok := value.(*Peer); ok {
-			if ok := peer.Send(e); !ok {
-				s.peers.Delete(key)
-			}
+		if peer, ok := value.(Sender); ok {
+			_ = peer.Send(e)
 		}
 		return true
 	})
@@ -62,11 +58,9 @@ func (s *EventService) Broadcast(e sse.Event) {
 
 func (s *EventService) CloseAll() {
 	s.peers.Range(func(key, value interface{}) bool {
-		if peer, ok := value.(*Peer); ok {
+		if peer, ok := value.(Sender); ok {
 			s.peers.Delete(key)
-			if peer != nil {
-				peer.Close()
-			}
+			peer.Close()
 		}
 		return true
 	})
@@ -103,13 +97,16 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 			ch := make(chan sse.Event, 1)
 			ctx, cancel := context.WithCancel(c)
 
+			var peer *Peer
+			var source *Source
+
 			go func() {
 				<-c.Writer.CloseNotify()
 				cancel()
+				if peer != nil {
+					peer.sources.Delete(sourceKey)
+				}
 			}()
-
-			var peer *Peer
-			var source *Source
 
 			defer func() {
 				source.Close()

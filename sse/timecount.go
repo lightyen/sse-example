@@ -59,11 +59,16 @@ func (p *TimeCountPlugin) Setup(srv *EventService, e *gin.RouterGroup) (func(p *
 	return func(peer *Peer) PeerRunner {
 			return nil
 		}, func(source *Source) SourceRunner {
-			return &TimeCountPluginInstance{plugin: p}
+			return &TimeCountPluginInstance{collection: p.collection}
 		}
 }
 
 func (p *TimeCountPlugin) Serve(c context.Context) {
+	addOne := func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.count++
+	}
 	for {
 		time.Sleep(time.Second)
 
@@ -73,9 +78,7 @@ func (p *TimeCountPlugin) Serve(c context.Context) {
 		default:
 		}
 
-		p.mu.Lock()
-		p.count++
-		p.mu.Unlock()
+		addOne()
 
 		// push data
 		p.Broadcast(sse.Event{Event: "timecount", Data: strconv.FormatInt(p.count, 10)})
@@ -85,20 +88,17 @@ func (p *TimeCountPlugin) Serve(c context.Context) {
 func (p *TimeCountPlugin) Broadcast(e sse.Event) {
 	p.collection.Range(func(key, value interface{}) bool {
 		if s, ok := value.(Sender); ok {
-			if ok := s.Send(e); !ok {
-				p.collection.Delete(key)
-			}
-
+			_ = s.Send(e)
 		}
 		return true
 	})
 }
 
 type TimeCountPluginInstance struct {
-	plugin *TimeCountPlugin
+	collection *sync.Map
 }
 
 func (t *TimeCountPluginInstance) Run(c context.Context, s *Source) {}
 func (t *TimeCountPluginInstance) Stop(s *Source) {
-	t.plugin.collection.Delete(s.key)
+	t.collection.Delete(s.key)
 }
