@@ -1,6 +1,7 @@
 import { Provider as ReactReduxProvider } from "react-redux"
 import { AppStoreContext, store } from "~/store"
 import View from "~/View"
+import "./style.css"
 
 function StoreProvider({ children }: { children?: React.ReactNode }) {
 	return (

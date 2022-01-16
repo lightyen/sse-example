@@ -1,17 +1,14 @@
 import { createReducer } from "@reduxjs/toolkit"
+import "xterm/css/xterm.css"
+import "xterm/lib/xterm.js"
 import * as ac from "./action"
 
 export interface AppStore {
 	source?: EventSource | undefined
-	lastEventId: number
-	data: string[]
 	count?: string
 }
 
-const init: AppStore = {
-	lastEventId: 0,
-	data: [],
-}
+const init: AppStore = {}
 
 export const app = createReducer(init, builder =>
 	builder
@@ -20,12 +17,6 @@ export const app = createReducer(init, builder =>
 		})
 		.addCase(ac.closeEventStream, state => {
 			state.source = undefined
-		})
-		.addCase(ac.command, state => {
-			state.data = []
-		})
-		.addCase(ac.eCommand, (state, { payload }) => {
-			state.data = state.data.concat(payload)
 		})
 		.addCase(ac.eCount, (state, { payload }) => {
 			state.count = payload

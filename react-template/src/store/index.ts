@@ -4,6 +4,7 @@ import { createDispatchHook, createSelectorHook, createStoreHook, ReactReduxCont
 import createSagaMiddleware from "redux-saga"
 import app from "~/store/app/action"
 import rootSaga from "~/store/saga"
+import terminal from "~/store/terminal/action"
 import { initReducer, RootStore } from "./reducer"
 
 export const AppStoreContext = createContext<ReactReduxContextValue<RootStore>>(null)
@@ -16,6 +17,7 @@ export function useAction() {
 	return useMemo(
 		() => ({
 			app: bindActionCreators(app, dispatch),
+			terminal: bindActionCreators(terminal, dispatch),
 		}),
 		[dispatch],
 	)

@@ -3,8 +3,8 @@ import axios from "axios"
 import type { Task } from "redux-saga"
 import { eventChannel } from "redux-saga"
 import { call, cancel, cancelled, fork, put, select, take, takeEvery } from "redux-saga/effects"
+import { addCommandHistory, cancelCommand, command, eCommand, eCommandEOF } from "../terminal/action"
 import * as ac from "./action"
-import { command } from "./action"
 
 function event(source: EventSource, event: string) {
 	return eventChannel(emit => {
@@ -33,7 +33,12 @@ function handleEventStream(url: string) {
 					const ch = event(source, "command")
 					while (true) {
 						const { data } = yield take(ch)
-						yield put(ac.eCommand(data))
+						const resp = JSON.parse(data)
+						if (resp.type === "eof") {
+							yield put(eCommandEOF(resp.data))
+							continue
+						}
+						yield put(eCommand(resp.data))
 					}
 				}),
 				yield fork(function* () {
@@ -50,6 +55,7 @@ function handleEventStream(url: string) {
 				const { lastEventId } = yield take(ch)
 				axios.defaults.headers.common["Last-Event-ID"] = lastEventId
 				yield put(ac.establishEventStream(source))
+				yield put(command(""))
 			}
 		} finally {
 			if (cancelled()) {
@@ -82,9 +88,10 @@ function* getSource() {
 export default function* saga() {
 	yield takeEvery([ac.openEventStream, ac.closeEventStream], eventStream(ac.openEventStream))
 
-	yield takeEvery(command, function* ({ payload: { name, args } }: ReturnType<typeof command>) {
+	yield takeEvery(command, function* ({ payload }: ReturnType<typeof command>) {
 		try {
-			yield call(axios.post, "/stream/command", { name, args })
+			yield call(axios.post, "/stream/command", { input: payload })
+			yield put(addCommandHistory(payload))
 		} catch {}
 	}),
 		yield takeEvery(ac.timecount, function* (a) {
@@ -101,7 +108,7 @@ export default function* saga() {
 			} catch {}
 		})
 
-	yield takeEvery(ac.cancel, function* () {
+	yield takeEvery(cancelCommand, function* () {
 		try {
 			yield call(axios.post, "/stream/cancel")
 		} catch {}

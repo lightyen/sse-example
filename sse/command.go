@@ -2,20 +2,20 @@ package sse
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
+	"github.com/google/shlex"
 )
 
 type SingleCommandRequest struct {
-	Name string   `json:"name"`
-	Args []string `json:"args"`
+	Input string `json:"input"`
 }
 
 type SingleCommandPlugin struct {
@@ -39,15 +39,8 @@ func (p *SingleCommandPlugin) Setup(srv *EventService, e *gin.RouterGroup) (func
 			return
 		}
 
-		switch req.Name {
-		case "ping":
-		default:
-			c.Status(http.StatusBadRequest)
-			return
-		}
-
 		s := srv.Source(c)
-		if p == nil {
+		if s == nil {
 			c.Status(http.StatusBadRequest)
 			return
 		}
@@ -57,6 +50,7 @@ func (p *SingleCommandPlugin) Setup(srv *EventService, e *gin.RouterGroup) (func
 				t.request <- req
 			}
 		}
+
 		c.Status(http.StatusOK)
 	})
 
@@ -94,21 +88,73 @@ type SingleCommandInstance struct {
 }
 
 func (t *SingleCommandInstance) Run(ctx context.Context, s *Source) {
-	var eventID int64 = 0
+SKIP:
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case req := <-t.request:
-			eventID++
 			t.Cancel()
 			ctx, cancel := context.WithCancel(ctx)
 			t.cancel <- cancel
-			send := func(data string) bool {
-				// TODO: move id into data
-				return s.Send(sse.Event{Id: strconv.FormatInt(eventID, 10), Event: "command", Data: data})
+
+			type Response struct {
+				Type string `json:"type"`
+				Data string `json:"data"`
 			}
-			go t.runCommand(ctx, req.Name, req.Args, send)
+
+			header := "\r\x1b[K\x1b[40m\x1b[32m helloworld \x1b[30m\x1b[104m\x1b[30m root \x1b[40m\x1b[94m\x1b[0m "
+			send := func(data string) bool {
+				bs, _ := json.Marshal(Response{"data", data})
+				return s.Send(sse.Event{Event: "command", Data: string(bs)})
+			}
+			eof := func() bool {
+				bs, _ := json.Marshal(Response{"eof", header})
+				return s.Send(sse.Event{Event: "command", Data: string(bs)})
+			}
+			deny := func() bool {
+				bs, _ := json.Marshal(Response{"eof", "Access Deny\r\n" + header})
+				return s.Send(sse.Event{Event: "command", Data: string(bs)})
+			}
+
+			// TODO 1: parse input
+			lexer := shlex.NewLexer(strings.NewReader(req.Input))
+			words := []string{}
+			for val, err := lexer.Next(); err == nil; val, err = lexer.Next() {
+				words = append(words, val)
+			}
+			if len(words) == 0 {
+				eof()
+				continue
+			}
+
+			for i := range words {
+				switch {
+				case strings.HasPrefix(words[i], "|"):
+					fallthrough
+				case strings.HasPrefix(words[i], "&"):
+					fallthrough
+				case strings.HasPrefix(words[i], ">"):
+					fallthrough
+				case strings.HasPrefix(words[i], "<"):
+					deny()
+					continue SKIP
+				}
+			}
+
+			// TODO 2: whitelist
+			switch words[0] {
+			case "ping":
+			case "traceroute":
+			case "tracert":
+			case "nslookup":
+			case "echo":
+			default:
+				deny()
+				continue
+			}
+
+			go t.runCommand(ctx, words[0], words[1:], send, eof)
 		}
 	}
 }
@@ -128,32 +174,41 @@ func (t *SingleCommandInstance) Stop(s *Source) {
 	t.Cancel()
 }
 
-func (t *SingleCommandInstance) runCommand(ctx context.Context, name string, args []string, send func(data string) bool) {
+func (t *SingleCommandInstance) runCommand(ctx context.Context, name string, args []string, send func(data string) bool, eof func() bool) {
+	if _, err := exec.LookPath(name); err != nil {
+		send(err.Error() + "\n")
+		eof()
+		return
+	}
+
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stderr = cmd.Stdout
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
 		return
 	}
-	cmd.Stderr = cmd.Stdout
-	if err = cmd.Start(); err != nil {
-		send(err.Error())
-		return
-	}
+
 	defer func() {
 		var e *exec.ExitError
 		if err := cmd.Wait(); err != nil && !errors.As(err, &e) {
-			send(err.Error())
+			send(err.Error() + "\n")
 		}
+		eof()
 	}()
+
+	if err = cmd.Start(); err != nil {
+		send(err.Error() + "\n")
+		return
+	}
 	buf := make([]byte, 256)
 	for {
 		n, err := cmdReader.Read(buf)
 		if n > 0 {
-			send(strings.Replace(string(buf[:n]), "\r\n", "\n", -1))
+			send(string(buf[:n]))
 		}
 		if err != nil {
 			if err != io.EOF {
-				send(err.Error())
+				send(err.Error() + "\n")
 			}
 			return
 		}

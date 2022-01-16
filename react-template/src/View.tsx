@@ -1,42 +1,25 @@
-import { useEffect, useState } from "react"
-import { useAction, useSelect } from "~/store"
-
-function Count() {
-	const count = useSelect(state => state.app.count)
-	const { timecount } = useAction().app
-	useEffect(() => {
-		timecount()
-		return () => {
-			timecount(false)
-		}
-	}, [timecount])
-	return <span>{count}</span>
-}
+import { useAction } from "~/store"
+import { Terminal } from "./Terminal"
 
 export default function Content() {
-	const { command, cancel } = useAction().app
-	const data = useSelect(state => state.app.data)
-	const [enable, setEnable] = useState(false)
+	const { command, cancelCommand } = useAction().terminal
 	return (
-		<div>
+		<div style={{ padding: "2rem", background: "#787878" }}>
 			<button
 				onClick={() => {
-					command("ping", ["8.8.8.8"])
-					setEnable(true)
+					command("ping 8.8.8.8")
 				}}
 			>
 				Submit
 			</button>
 			<button
 				onClick={() => {
-					cancel()
-					setEnable(false)
+					cancelCommand()
 				}}
 			>
 				Cancel
 			</button>
-			{enable && <Count />}
-			<pre>{data.join("")}</pre>
+			<Terminal />
 		</div>
 	)
 }

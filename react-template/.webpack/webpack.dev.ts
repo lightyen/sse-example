@@ -10,11 +10,18 @@ process.env.PUBLIC_URL = ""
 export default merge(createBaseConfig(), {
 	mode: "development",
 	devtool: "inline-source-map",
+	// @ts-expect-error
 	devServer: {
 		hot: true,
-		compress: true,
+		compress: false,
 		open: true,
 		historyApiFallback: true,
+		proxy: [
+			{
+				context: ["/stream"],
+				target: "http://localhost:8080",
+			},
+		],
 	},
 	stats: {
 		children: false,

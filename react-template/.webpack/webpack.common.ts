@@ -1,5 +1,6 @@
 import glob from "glob"
 import HtmlWebpackPlugin from "html-webpack-plugin"
+import MiniCssExtractPlugin from "mini-css-extract-plugin"
 import path from "path"
 import TsPathsResolvePlugin from "ts-paths-resolve-plugin"
 import { Configuration } from "webpack"
@@ -8,7 +9,7 @@ import WebpackbarPlugin from "webpackbar"
 export default function (): Configuration {
 	const workspaceFolder = path.resolve(__dirname, "..")
 	const isDev = process.env.NODE_ENV !== "production"
-	// const outputCSS = "css"
+	const outputCSS = "css"
 	const outputJS = "js"
 	const publicPath = "/"
 
@@ -18,6 +19,13 @@ export default function (): Configuration {
 	const join_network = (...args: string[]) => path.join(...args).replace(path.sep, "/")
 
 	const indices = glob.sync("index.*", { cwd: src })
+
+	const styleLoader = {
+		loader: isDev ? "style-loader" : MiniCssExtractPlugin.loader,
+		options: {
+			...(!isDev && { publicPath: path.relative(path.join(publicPath, outputCSS), publicPath) }),
+		},
+	}
 
 	return {
 		target: "web",
@@ -31,6 +39,7 @@ export default function (): Configuration {
 				favicon: path.join(workspaceFolder, "public", "favicon.ico"),
 			}),
 			new WebpackbarPlugin(),
+			new MiniCssExtractPlugin(),
 		],
 		resolve: {
 			extensions: [".ts", ".tsx", ".js", ".jsx", ".json"],
@@ -81,6 +90,10 @@ export default function (): Configuration {
 				{
 					test: /\.ya?ml$/,
 					use: "js-yaml-loader",
+				},
+				{
+					test: /\.css$/,
+					use: [styleLoader, "css-loader"],
 				},
 			],
 		},
