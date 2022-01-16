@@ -1,5 +1,5 @@
 import { eventChannel } from "redux-saga"
-import { put, select, take, takeEvery } from "redux-saga/effects"
+import { put, take, takeEvery } from "redux-saga/effects"
 import { Terminal } from "xterm"
 import { FitAddon } from "xterm-addon-fit"
 import "xterm/css/xterm.css"
@@ -13,7 +13,6 @@ export const term = new Terminal({
 	allowTransparency: false,
 	rendererType: "canvas",
 	theme: {
-		foreground: "#adecff",
 		background: "#222222",
 		cursor: "#eeeeee",
 		cursorAccent: "#222222",
@@ -22,6 +21,7 @@ export const term = new Terminal({
 })
 
 const printable_ascii = /^[\x20-\x7E]$/
+let count = 0
 
 term.loadAddon(new FitAddon())
 // for (let i = 0xa0; i <= 0xd6; i++) {
@@ -33,9 +33,6 @@ export interface KeyEvent {
 	domEvent: KeyboardEvent
 }
 
-let buffer = ""
-let count = 0
-
 function key(terminal: Terminal) {
 	return eventChannel(emit => {
 		const d = terminal.onKey(e => emit(e))
@@ -44,11 +41,9 @@ function key(terminal: Terminal) {
 }
 
 export default function* saga() {
-	yield takeEvery(ac.eCommand, function* ({ payload }) {
+	yield takeEvery(ac.eShell, function* ({ payload }) {
 		yield term.write(payload)
-	})
-	yield takeEvery(ac.eCommandEOF, function* ({ payload }) {
-		yield term.write(payload)
+		if (payload === "\b") term.write("\x1b[P")
 	})
 	yield takeEvery(ac.openTerminal, function* () {
 		const ch = key(term)
@@ -63,47 +58,27 @@ export default function* saga() {
 				term.blur()
 				continue
 			}
+
 			if (domEvent.key === "Backspace") {
 				if (count > 0) {
-					term.write("\x1b[D\x1b[K")
+					yield put(ac.shell("\b"))
 					count--
-					buffer = buffer.slice(0, -1)
 				}
 				continue
 			}
 
-			console.log(JSON.stringify({ key }))
-			const running = yield select(state => state.terminal.running)
-
-			switch (key) {
-				case "\x03":
-					yield put(ac.cancelCommand())
-					break
-				case "\f":
-					term.clear()
-					break
-				case "\r":
-					if (running) continue
-					term.write("\r\n")
-					if (!buffer) {
-						yield put(ac.command(""))
-					} else {
-						console.log(buffer)
-						yield put(ac.command(buffer))
-					}
-					buffer = ""
-					count = 0
-					break
-				case "\x1b":
-					term.blur()
-					break
-				default:
-					if (printable_ascii.test(key)) {
-						term.write(key)
-						count++
-						buffer += key
-					}
+			if (key === "\r") {
+				count = 0
+				term.write("\n")
 			}
+
+			console.log(JSON.stringify({ key }))
+
+			if (printable_ascii.test(key)) {
+				count++
+			}
+
+			yield put(ac.shell(key))
 		}
 	})
 }

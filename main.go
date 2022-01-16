@@ -51,7 +51,7 @@ func main() {
 
 	ctx := context.Background()
 	evt := sse.NewEventService(ctx, e.Group("/stream"),
-		sse.SingleCommand(),
+		sse.Shell(),
 		sse.TimeCount(),
 	)
 
