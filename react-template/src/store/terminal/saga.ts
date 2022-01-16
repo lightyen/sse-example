@@ -1,5 +1,5 @@
 import { eventChannel } from "redux-saga"
-import { put, take, takeEvery } from "redux-saga/effects"
+import { put, take, takeEvery, fork } from "redux-saga/effects"
 import { Terminal } from "xterm"
 import { FitAddon } from "xterm-addon-fit"
 import "xterm/css/xterm.css"
@@ -23,7 +23,8 @@ export const term = new Terminal({
 const printable_ascii = /^[\x20-\x7E]$/
 let count = 0
 
-term.loadAddon(new FitAddon())
+const fitAddon = new FitAddon()
+term.loadAddon(fitAddon)
 // for (let i = 0xa0; i <= 0xd6; i++) {
 // 	term.write(String.fromCharCode(0xe000 + i) + " ")
 // }
@@ -40,37 +41,88 @@ function key(terminal: Terminal) {
 	})
 }
 
+function custom(terminal: Terminal) {
+	return eventChannel(emit => {
+		terminal.attachCustomKeyEventHandler(e => {
+			const { key, ctrlKey, type } = e
+
+			switch (key) {
+				case "F5":
+				case "F12":
+				case "ArrowLeft":
+				case "ArrowRight":
+				case "ArrowUp":
+				case "ArrowDown":
+					return false
+			}
+
+			if (key === "Backspace") {
+				if (type === "keydown") emit(e)
+				return false
+			}
+
+			if (ctrlKey && key === "K") {
+				if (type === "keydown") emit(e)
+				return false
+			}
+
+			if (key === "Enter") {
+				if (type === "keydown") emit(e)
+				return false
+			}
+
+			return true
+		})
+		return () => void 0
+	})
+}
+
 export default function* saga() {
 	yield takeEvery(ac.eShell, function* ({ payload }) {
-		yield term.write(payload)
-		if (payload === "\b") term.write("\x1b[P")
+		yield
+		if (payload === "\t") return
+		term.write(payload)
+		switch (payload) {
+			case "\b":
+				term.write("\x1b[P")
+				break
+		}
 	})
 	yield takeEvery(ac.openTerminal, function* () {
+		fitAddon.fit()
 		const ch = key(term)
+		const customCh = custom(term)
+
+		yield fork(function* () {
+			while (true) {
+				const { key, ctrlKey } = yield take(customCh)
+
+				if (ctrlKey && key === "K") {
+					term.clear()
+					yield put(ac.shell(""))
+					continue
+				}
+
+				if (key === "Backspace") {
+					if (count > 0) {
+						yield put(ac.shell("\b"))
+						count--
+					}
+					continue
+				}
+
+				if (key === "Enter") {
+					count = 0
+					term.write("\n")
+					yield put(ac.shell("\r"))
+					continue
+				}
+			}
+		})
+
 		while (true) {
 			const e: KeyEvent = yield take(ch)
-			const { domEvent, key } = e
-			if (domEvent.key === "F5") {
-				window.location.reload()
-				continue
-			}
-			if (domEvent.key === "F12") {
-				term.blur()
-				continue
-			}
-
-			if (domEvent.key === "Backspace") {
-				if (count > 0) {
-					yield put(ac.shell("\b"))
-					count--
-				}
-				continue
-			}
-
-			if (key === "\r") {
-				count = 0
-				term.write("\n")
-			}
+			const { key } = e
 
 			console.log(JSON.stringify({ key }))
 
