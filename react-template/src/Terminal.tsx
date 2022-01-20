@@ -1,19 +1,18 @@
 import { useEffect, useRef } from "react"
-import { useAction, useSelect } from "~/store"
+import { useAction } from "~/store"
 
 export function Terminal() {
 	const { openTerminal, closeTerminal } = useAction().terminal
-	const term = useSelect(state => state.terminal.term)
 	const ref = useRef<HTMLDivElement>()
 	useEffect(() => {
 		openTerminal(ref.current)
 		return () => {
 			closeTerminal()
 		}
-	}, [openTerminal, closeTerminal, term])
+	}, [openTerminal, closeTerminal])
 	return (
-		<div style={{ display: "flex", justifyContent: "center" }}>
-			<div ref={ref} style={{ overflow: "hidden" }} />
+		<div style={{ padding: "2rem", width: "800px" }}>
+			<div ref={ref} />
 		</div>
 	)
 }

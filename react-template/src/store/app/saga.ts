@@ -3,7 +3,7 @@ import axios from "axios"
 import type { Task } from "redux-saga"
 import { eventChannel } from "redux-saga"
 import { call, cancel, cancelled, fork, put, select, take, takeEvery } from "redux-saga/effects"
-import { addCommandHistory, cancelCommand, command, eCommand, eCommandEOF } from "../terminal/action"
+import { eTerminal, eTerminalEOF, eClearTerminal } from "../terminal/action"
 import * as ac from "./action"
 
 function event(source: EventSource, event: string) {
@@ -30,16 +30,22 @@ function handleEventStream(url: string) {
 		try {
 			tasks = [
 				yield fork(function* () {
-					const ch = event(source, "command")
-					while (true) {
-						const { data } = yield take(ch)
-						const resp = JSON.parse(data)
-						if (resp.type === "eof") {
-							yield put(eCommandEOF(resp.data))
-							continue
+					const ch = event(source, "terminal")
+						while (true) {
+							const { data } = yield take(ch)
+							const resp = JSON.parse(data)
+							switch (resp.type) {
+								case "eof":
+									yield put(eTerminalEOF(resp.data))
+									break
+								case "out":
+									yield put(eTerminal(resp.data))
+									break
+								case "clear":
+									yield put(eClearTerminal())
+									break
+							}
 						}
-						yield put(eCommand(resp.data))
-					}
 				}),
 				yield fork(function* () {
 					const ch = event(source, "timecount")
@@ -55,7 +61,6 @@ function handleEventStream(url: string) {
 				const { lastEventId } = yield take(ch)
 				axios.defaults.headers.common["Last-Event-ID"] = lastEventId
 				yield put(ac.establishEventStream(source))
-				yield put(command(""))
 			}
 		} finally {
 			if (cancelled()) {
@@ -88,29 +93,17 @@ function* getSource() {
 export default function* saga() {
 	yield takeEvery([ac.openEventStream, ac.closeEventStream], eventStream(ac.openEventStream))
 
-	yield takeEvery(command, function* ({ payload }: ReturnType<typeof command>) {
+	yield takeEvery(ac.timecount, function* (a) {
 		try {
-			yield call(axios.post, "/stream/command", { input: payload })
-			yield put(addCommandHistory(payload))
-		} catch {}
-	}),
-		yield takeEvery(ac.timecount, function* (a) {
-			try {
-				if (a.payload === false) {
-					yield call(axios.get, `/stream/timecount`, { params: { enable: "off" } })
-				} else {
-					const source: EventSource | undefined = yield getSource()
-					if (!source) {
-						yield take(ac.establishEventStream)
-					}
-					yield call(axios.get, `/stream/timecount`)
+			if (a.payload === false) {
+				yield call(axios.get, `/stream/timecount`, { params: { enable: "off" } })
+			} else {
+				const source: EventSource | undefined = yield getSource()
+				if (!source) {
+					yield take(ac.establishEventStream)
 				}
-			} catch {}
-		})
-
-	yield takeEvery(cancelCommand, function* () {
-		try {
-			yield call(axios.post, "/stream/cancel")
+				yield call(axios.get, `/stream/timecount`)
+			}
 		} catch {}
 	})
 

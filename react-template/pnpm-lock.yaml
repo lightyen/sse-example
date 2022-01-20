@@ -58,8 +58,10 @@ specifiers:
   webpack-merge: 5.8.0
   webpackbar: 5.0.2
   worker-loader: 3.0.8
-  xterm: ^4.16.0
-  xterm-addon-fit: ^0.5.0
+  xterm: 4.16.0
+  xterm-addon-fit: 0.5.0
+  xterm-addon-unicode11: ^0.3.0
+  xterm-addon-webgl: 0.11.4
 
 dependencies:
   '@reduxjs/toolkit': 1.7.1_react-redux@7.2.6+react@17.0.2
@@ -73,6 +75,8 @@ dependencies:
   redux-saga: 1.1.3
   xterm: 4.16.0
   xterm-addon-fit: 0.5.0_xterm@4.16.0
+  xterm-addon-unicode11: 0.3.0_xterm@4.16.0
+  xterm-addon-webgl: 0.11.4_xterm@4.16.0
 
 devDependencies:
   '@babel/core': 7.16.7
@@ -8217,6 +8221,22 @@ packages:
 
   /xterm-addon-fit/0.5.0_xterm@4.16.0:
     resolution: {integrity: sha512-DsS9fqhXHacEmsPxBJZvfj2la30Iz9xk+UKjhQgnYNkrUIN5CYLbw7WEfz117c7+S86S/tpHPfvNxJsF5/G8wQ==}
+    peerDependencies:
+      xterm: ^4.0.0
+    dependencies:
+      xterm: 4.16.0
+    dev: false
+
+  /xterm-addon-unicode11/0.3.0_xterm@4.16.0:
+    resolution: {integrity: sha512-x5fHDZT2j9tlTlHnzPHt++9uKZ2kJ/lYQOj3L6xJA22xoJsS8UQRw/5YIFg2FUHqEAbV77Z1fZij/9NycMSH/A==}
+    peerDependencies:
+      xterm: ^4.0.0
+    dependencies:
+      xterm: 4.16.0
+    dev: false
+
+  /xterm-addon-webgl/0.11.4_xterm@4.16.0:
+    resolution: {integrity: sha512-/a/VFeftc+etGXQYWaaks977j1P7/wickBXn15zDxZzXYYMT9RN17ztqyIDVLXg9krtg28+icKK6lvgIYghJ0w==}
     peerDependencies:
       xterm: ^4.0.0
     dependencies:
