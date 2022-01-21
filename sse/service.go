@@ -130,7 +130,7 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 					}
 					if obj := b.peer(peer); obj != nil {
 						peer.plugins[name] = obj
-						go peer.plugins[name].Run(ctx, peer)
+						peer.plugins[name].Start(ctx, peer)
 					}
 				}
 				return peer
@@ -151,7 +151,7 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 					}
 					if obj := b.source(source); obj != nil {
 						source.plugins[name] = obj
-						go source.plugins[name].Run(ctx, source)
+						source.plugins[name].Start(ctx, source)
 					}
 				}
 				return source
@@ -195,7 +195,7 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 	for _, p := range plugins {
 		peer, source := p.Setup(s, g)
 		m[p.Name()] = PluginBuilder{peer, source}
-		go p.Serve(ctx)
+		p.Start(ctx)
 	}
 
 	g.GET("", createHandler(m))

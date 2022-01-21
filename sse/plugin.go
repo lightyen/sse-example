@@ -9,15 +9,15 @@ import (
 type Plugin interface {
 	Name() string
 	Setup(s *EventService, e *gin.RouterGroup) (func(p *Peer) PeerRunner, func(s *Source) SourceRunner)
-	Serve(c context.Context)
+	Start(c context.Context)
 }
 
 type PeerRunner interface {
-	Run(c context.Context, p *Peer)
+	Start(c context.Context, p *Peer)
 	Stop(p *Peer)
 }
 
 type SourceRunner interface {
-	Run(c context.Context, s *Source)
+	Start(c context.Context, s *Source)
 	Stop(s *Source)
 }

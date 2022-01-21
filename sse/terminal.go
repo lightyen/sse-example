@@ -104,7 +104,7 @@ func (p *TerminalPlugin) Setup(srv *EventService, e *gin.RouterGroup) (func(peer
 		}
 }
 
-func (p *TerminalPlugin) Serve(ctx context.Context) {}
+func (p *TerminalPlugin) Start(ctx context.Context) {}
 
 type TerminalInstance struct {
 	data         chan string
@@ -132,8 +132,12 @@ func (t *TerminalInstance) Stop(s *Source) {
 	t.Cancel()
 }
 
-func (t *TerminalInstance) Run(ctx context.Context, s *Source) {
+func (t *TerminalInstance) Start(ctx context.Context, s *Source) {
 	r := NewInputReader(ctx, t.data)
+	go t.readLoop(ctx, r, s)
+}
+
+func (t *TerminalInstance) readLoop(ctx context.Context, r *InputReader, s *Source) {
 	buf := bufio.NewReader(r)
 	history := ring.New(16)
 
@@ -518,7 +522,7 @@ const (
 
 var ErrUnknownEscape = errors.New("unknown escape code")
 
-func (t *TerminalInstance) readEscape(buf *bufio.Reader) (EscapeKey, rune, error) {
+func (t *TerminalInstance) readEscape(buf io.RuneReader) (EscapeKey, rune, error) {
 	lastRune, _, err := buf.ReadRune()
 	if err != nil {
 		return Unknown, lastRune, err
