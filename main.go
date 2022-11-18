@@ -3,11 +3,14 @@ package main
 import (
 	"app/sse"
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-contrib/static"
@@ -45,20 +48,83 @@ func fallback(filename string, allowAny bool) gin.HandlerFunc {
 	}
 }
 
+func run(ctx context.Context, g *gin.Engine) *sse.EventService {
+	e := sse.NewEventSourceService()
+	g.GET("/apis/stream", e.StreamHandlerFunc)
+
+	e.Register(func(s *sse.Source) {
+		cnt := 0
+		for {
+			select {
+			default:
+			case <-s.Done():
+				fmt.Println("I'm done.")
+				return
+			}
+			time.Sleep(time.Second)
+			cnt++
+			fmt.Println("my count", cnt)
+		}
+	})
+
+	// custom feature
+	{
+		var count int64
+		mu := &sync.RWMutex{}
+		collection := sse.NewSourceMap()
+		go func() {
+			for {
+				select {
+				default:
+				case <-ctx.Done():
+					fmt.Println("app done.")
+					return
+				}
+
+				mu.Lock()
+				count++
+				e.Broadcast(sse.Event{Event: "timecount", Data: strconv.FormatInt(count, 10)})
+				mu.Unlock()
+
+				time.Sleep(time.Second)
+			}
+		}()
+		g.GET("/apis/timecount", func(c *gin.Context) {
+			s, exists := e.Source(c)
+			if !exists {
+				c.Status(http.StatusBadRequest)
+				return
+			}
+
+			if c.Query("enable") == "off" {
+				collection.Delete(c)
+				return
+			}
+
+			if _, exists := collection.Load(c); !exists {
+				collection.Store(c, s)
+			}
+
+			mu.RLock()
+			defer mu.RUnlock()
+			s.Send(sse.Event{Event: "timecount", Data: strconv.FormatInt(count, 10)})
+			c.Status(http.StatusOK)
+		})
+	}
+
+	return e
+}
+
 func main() {
-	e := gin.Default()
-	e.NoRoute(noCacheFirstPage(), static.Serve("/", static.LocalFile("frontend/dist", true)), fallback(filepath.Join("frontend/dist", "index.html"), true))
+	g := gin.Default()
+	g.NoRoute(noCacheFirstPage(), static.Serve("/", static.LocalFile("react-emotion/build", true)), fallback(filepath.Join("react-template/build", "index.html"), true))
 
 	ctx := context.Background()
-	evt := sse.NewEventService(ctx,
-		e.Group("/"),
-		sse.SingleCommand(),
-		sse.TimeCount(),
-	)
+	e := run(ctx, g)
 
 	srv := http.Server{
 		Addr:         ":8080",
-		Handler:      e,
+		Handler:      g,
 		WriteTimeout: 0,
 	}
 
@@ -80,6 +146,6 @@ func main() {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	evt.CloseAll()
+	e.CloseAll()
 	_ = srv.Shutdown(ctx)
 }
