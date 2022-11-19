@@ -5,7 +5,7 @@ export const closeEventStream = createAction("close_event_stream")
 export const establishEventStream = createAction<EventSource>("establish_event_stream")
 export const errorEventStream = createAction("error_event_stream")
 
-export const command = createAction("COMMAND", (name: string, args: string[]) => {
+export const command = createAction("command", (name: string, args: string[]) => {
 	return {
 		payload: {
 			name,
@@ -16,16 +16,14 @@ export const command = createAction("COMMAND", (name: string, args: string[]) =>
 
 export const eCommand = createAction("event_command", (payload: string) => ({ payload }))
 
-export const eCount = createAction("event_count", (data: string) => {
-	return { payload: data }
-})
+export const eCount = createAction("event_count", (data: string) => ({ payload: data }))
 
-export const cancel = createAction("CANCEL")
+export const commandCancel = createAction("command_cancel")
 
-export const timecount = createAction<false | undefined>("TIME_COUNT")
+export const timecount = createAction<false | undefined>("timecount")
 
 export default {
 	command,
-	cancel,
+	cancel: commandCancel,
 	timecount,
 }

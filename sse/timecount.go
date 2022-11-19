@@ -14,56 +14,63 @@ import (
 type TimeCountPlugin struct {
 	name       string
 	srv        *EventService
-	collection *sync.Map
+	collection *EventSourceMap
 
 	mu    sync.RWMutex
 	count int64
 }
 
+type TimeCountPluginInstance struct {
+	collection *EventSourceMap
+}
+
+var (
+	_ Plugin         = new(TimeCountPlugin)
+	_ PluginInstance = new(TimeCountPluginInstance)
+)
+
 // APIs: "/timecount"
 func TimeCount() *TimeCountPlugin {
 	return &TimeCountPlugin{
-		name:       "time count",
-		collection: &sync.Map{},
+		name:       "time_count",
+		collection: NewSourceMap(),
 	}
 }
 
 func (p *TimeCountPlugin) Name() string { return p.name }
 
-func (p *TimeCountPlugin) Setup(srv *EventService, e *gin.RouterGroup) (func(p *Peer) PeerRunner, func(s *Source) SourceRunner) {
+func (p *TimeCountPlugin) Install(srv *EventService, e *gin.RouterGroup) func(s *EventSource) PluginInstance {
 	p.srv = srv
 	e.GET("/timecount", func(c *gin.Context) {
 		disabled := c.Query("enable") == "off"
 
-		s := srv.Source(c)
-		if s == nil {
+		s, exists := srv.FromContext(c)
+		if !exists {
 			c.Status(http.StatusBadRequest)
 			return
 		}
 
 		if disabled {
-			_, _ = p.collection.LoadAndDelete(s.key)
+			p.collection.Delete(s.id)
 			return
 		}
 
-		if _, ok := p.collection.Load(s.key); !ok {
-			p.collection.Store(s.key, s)
+		if _, exists := p.collection.Load(s.id); !exists {
+			p.collection.Store(s.id, s)
 		}
 
 		p.mu.RLock()
 		defer p.mu.RUnlock()
-		s.Send(sse.Event{Event: "timecount", Data: strconv.FormatInt(p.count, 10)})
+		s.Send(&sse.Event{Event: "timecount", Data: strconv.FormatInt(p.count, 10)})
 		c.Status(http.StatusOK)
 	})
 
-	return func(peer *Peer) PeerRunner {
-			return nil
-		}, func(source *Source) SourceRunner {
-			return &TimeCountPluginInstance{collection: p.collection}
-		}
+	return func(source *EventSource) PluginInstance {
+		return &TimeCountPluginInstance{collection: p.collection}
+	}
 }
 
-func (p *TimeCountPlugin) Serve(c context.Context) {
+func (p *TimeCountPlugin) Run(c context.Context) {
 	addOne := func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -80,25 +87,19 @@ func (p *TimeCountPlugin) Serve(c context.Context) {
 
 		addOne()
 
-		// push data
-		p.Broadcast(sse.Event{Event: "timecount", Data: strconv.FormatInt(p.count, 10)})
+		p.Broadcast(&sse.Event{Event: "timecount", Data: strconv.FormatInt(p.count, 10)})
 	}
 }
 
-func (p *TimeCountPlugin) Broadcast(e sse.Event) {
-	p.collection.Range(func(key, value interface{}) bool {
-		if s, ok := value.(Sender); ok {
-			_ = s.Send(e)
-		}
+func (p *TimeCountPlugin) Broadcast(e *sse.Event) {
+	p.collection.Range(func(k string, v *EventSource) bool {
+		v.Send(e)
 		return true
 	})
 }
 
-type TimeCountPluginInstance struct {
-	collection *sync.Map
-}
+func (t *TimeCountPluginInstance) Run(s *EventSource) {}
 
-func (t *TimeCountPluginInstance) Run(c context.Context, s *Source) {}
-func (t *TimeCountPluginInstance) Stop(s *Source) {
-	t.collection.Delete(s.key)
+func (t *TimeCountPluginInstance) Dispose(s *EventSource) {
+	t.collection.Delete(s.id)
 }

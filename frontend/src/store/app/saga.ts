@@ -84,26 +84,26 @@ export default function* saga() {
 
 	yield takeEvery(command, function* ({ payload: { name, args } }: ReturnType<typeof command>) {
 		try {
-			yield call(axios.post, "/stream/command", { name, args })
+			yield call(axios.post, "/command", { name, args })
 		} catch {}
 	}),
 		yield takeEvery(ac.timecount, function* (a) {
 			try {
 				if (a.payload === false) {
-					yield call(axios.get, `/stream/timecount`, { params: { enable: "off" } })
+					yield call(axios.get, "/timecount", { params: { enable: "off" } })
 				} else {
 					const source: EventSource | undefined = yield getSource()
 					if (!source) {
 						yield take(ac.establishEventStream)
 					}
-					yield call(axios.get, `/stream/timecount`)
+					yield call(axios.get, "/timecount")
 				}
 			} catch {}
 		})
 
-	yield takeEvery(ac.cancel, function* () {
+	yield takeEvery(ac.commandCancel, function* () {
 		try {
-			yield call(axios.post, "/stream/cancel")
+			yield call(axios.post, "/command/cancel")
 		} catch {}
 	})
 

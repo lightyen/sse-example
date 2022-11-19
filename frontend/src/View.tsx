@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useAction, useSelect } from "~/store"
+import { useAction, useSelect } from "~/store/hooks"
 
 function Count() {
 	const count = useSelect(state => state.app.count)
@@ -21,7 +21,7 @@ export default function Content() {
 		<div>
 			<button
 				onClick={() => {
-					command("ping", ["8.8.8.8"])
+					command("seq", ["1", "5"])
 					setEnable(true)
 				}}
 			>

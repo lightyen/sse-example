@@ -1,6 +1,10 @@
 {
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  },
   "editor.formatOnSave": true,
   "editor.snippetSuggestions": "none",
+  "javascript.suggestionActions.enabled": false,
   "editor.codeActionsOnSave": {
     "source.organizeImports": true
   },
@@ -10,23 +14,18 @@
     "typescript",
     "typescriptreact"
   ],
-  "formatFiles.excludePattern": "node_modules,build,.gitignore,.editorconfig,.browserslistrc,yarn.lock",
+  "formatFiles.excludePattern": "node_modules,dist,build,.gitignore,.editorconfig,.browserslistrc,yarn.lock,.pnp.*",
   "search.exclude": {
     "**/build": true,
-    "**/node_modules": true
+    "**/node_modules": true,
+    "**/.yarn": true,
+    "**/.pnp.*": true
   },
-  "typescript.tsdk": "node_modules/typescript/lib",
-  "npm.autoDetect": "off",
-  "typescript.tsc.autoDetect": "off",
   "eslint.validate": [
     "javascript",
     "javascriptreact",
     "typescript",
     "typescriptreact"
   ],
-  "files.watcherExclude": {
-    "**/.cache": true,
-    "**/build": true
-  },
-  "javascript.suggestionActions.enabled": false
+  "typescript.tsdk": "node_modules/typescript/lib"
 }

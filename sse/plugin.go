@@ -7,17 +7,14 @@ import (
 )
 
 type Plugin interface {
-	Name() string
-	Setup(s *EventService, e *gin.RouterGroup) (func(p *Peer) PeerRunner, func(s *Source) SourceRunner)
-	Serve(c context.Context)
+	Install(s *EventService, e *gin.RouterGroup) func(s *EventSource) PluginInstance
+	// Run plugin task
+	Run(c context.Context)
 }
 
-type PeerRunner interface {
-	Run(c context.Context, p *Peer)
-	Stop(p *Peer)
-}
-
-type SourceRunner interface {
-	Run(c context.Context, s *Source)
-	Stop(s *Source)
+type PluginInstance interface {
+	// Run with the certain client
+	Run(s *EventSource)
+	// Dispose the certain client
+	Dispose(s *EventSource)
 }

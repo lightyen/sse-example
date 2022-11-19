@@ -47,10 +47,11 @@ func fallback(filename string, allowAny bool) gin.HandlerFunc {
 
 func main() {
 	e := gin.Default()
-	e.NoRoute(noCacheFirstPage(), static.Serve("/", static.LocalFile("react-template/build", true)), fallback(filepath.Join("react-template/build", "index.html"), true))
+	e.NoRoute(noCacheFirstPage(), static.Serve("/", static.LocalFile("frontend/dist", true)), fallback(filepath.Join("frontend/dist", "index.html"), true))
 
 	ctx := context.Background()
-	evt := sse.NewEventService(ctx, e.Group("/stream"),
+	evt := sse.NewEventService(ctx,
+		e.Group("/"),
 		sse.SingleCommand(),
 		sse.TimeCount(),
 	)

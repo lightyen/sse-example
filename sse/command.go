@@ -25,13 +25,23 @@ type SingleCommandPlugin struct {
 // APIs: "/command", "/cancel"
 func SingleCommand() *SingleCommandPlugin {
 	return &SingleCommandPlugin{
-		name: "single command",
+		name: "single_command",
 	}
 }
 
+type SingleCommandInstance struct {
+	request chan *SingleCommandRequest
+	cancel  chan context.CancelFunc
+}
+
+var (
+	_ Plugin         = new(SingleCommandPlugin)
+	_ PluginInstance = new(SingleCommandInstance)
+)
+
 func (p *SingleCommandPlugin) Name() string { return p.name }
 
-func (p *SingleCommandPlugin) Setup(srv *EventService, e *gin.RouterGroup) (func(p *Peer) PeerRunner, func(s *Source) SourceRunner) {
+func (p *SingleCommandPlugin) Install(srv *EventService, e *gin.RouterGroup) func(s *EventSource) PluginInstance {
 	e.POST("/command", func(c *gin.Context) {
 		req := &SingleCommandRequest{}
 		if err := c.ShouldBindJSON(req); err != nil {
@@ -40,80 +50,77 @@ func (p *SingleCommandPlugin) Setup(srv *EventService, e *gin.RouterGroup) (func
 		}
 
 		switch req.Name {
-		case "ping":
+		case "seq":
 		default:
 			c.Status(http.StatusBadRequest)
 			return
 		}
 
-		s := srv.Source(c)
-		if p == nil {
+		s, exists := srv.FromContext(c)
+		if !exists {
 			c.Status(http.StatusBadRequest)
 			return
 		}
 
-		if r, ok := s.plugins[p.name]; ok {
-			if t, ok := r.(*SingleCommandInstance); ok {
+		for _, r := range s.pluginInstances {
+			switch t := r.(type) {
+			case *SingleCommandInstance:
 				t.request <- req
+				break
 			}
 		}
 		c.Status(http.StatusOK)
 	})
 
-	e.POST("/cancel", func(c *gin.Context) {
-		s := srv.Source(c)
-		if s == nil {
+	e.POST("/command/cancel", func(c *gin.Context) {
+		s, exists := srv.FromContext(c)
+		if !exists {
 			c.Status(http.StatusBadRequest)
 			return
 		}
 
-		if r, ok := s.plugins[p.name]; ok {
-			if t, ok := r.(*SingleCommandInstance); ok {
-				t.Cancel()
+		for _, r := range s.pluginInstances {
+			switch t := r.(type) {
+			case *SingleCommandInstance:
+				t.CancelCommand()
+				break
 			}
 		}
 
 		c.Status(http.StatusOK)
 	})
 
-	return func(peer *Peer) PeerRunner {
-			return nil
-		}, func(source *Source) SourceRunner {
-			return &SingleCommandInstance{
-				request: make(chan *SingleCommandRequest, 1),
-				cancel:  make(chan context.CancelFunc, 1),
-			}
+	return func(source *EventSource) PluginInstance {
+		return &SingleCommandInstance{
+			request: make(chan *SingleCommandRequest, 1),
+			cancel:  make(chan context.CancelFunc, 1),
 		}
+	}
 }
 
-func (p *SingleCommandPlugin) Serve(ctx context.Context) {}
+func (p *SingleCommandPlugin) Run(ctx context.Context) {}
 
-type SingleCommandInstance struct {
-	request chan *SingleCommandRequest
-	cancel  chan context.CancelFunc
-}
-
-func (t *SingleCommandInstance) Run(ctx context.Context, s *Source) {
+func (t *SingleCommandInstance) Run(s *EventSource) {
 	var eventID int64 = 0
 	for {
 		select {
-		case <-ctx.Done():
+		case <-s.Done():
 			return
 		case req := <-t.request:
 			eventID++
-			t.Cancel()
-			ctx, cancel := context.WithCancel(ctx)
+			t.CancelCommand()
+			ctx, cancel := context.WithCancel(s)
 			t.cancel <- cancel
-			send := func(data string) bool {
+			send := func(data string) {
 				// TODO: move id into data
-				return s.Send(sse.Event{Id: strconv.FormatInt(eventID, 10), Event: "command", Data: data})
+				s.Send(&sse.Event{Id: strconv.FormatInt(eventID, 10), Event: "command", Data: data})
 			}
 			go t.runCommand(ctx, req.Name, req.Args, send)
 		}
 	}
 }
 
-func (t *SingleCommandInstance) Cancel() {
+func (t *SingleCommandInstance) CancelCommand() {
 	for {
 		select {
 		case cancel := <-t.cancel:
@@ -124,36 +131,36 @@ func (t *SingleCommandInstance) Cancel() {
 	}
 }
 
-func (t *SingleCommandInstance) Stop(s *Source) {
-	t.Cancel()
+func (t *SingleCommandInstance) Dispose(s *EventSource) {
+	t.CancelCommand()
 }
 
-func (t *SingleCommandInstance) runCommand(ctx context.Context, name string, args []string, send func(data string) bool) {
-	cmd := exec.CommandContext(ctx, name, args...)
+func (t *SingleCommandInstance) runCommand(c context.Context, name string, args []string, send func(data string)) {
+	cmd := exec.CommandContext(c, name, args...)
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
 		return
 	}
 	cmd.Stderr = cmd.Stdout
 	if err = cmd.Start(); err != nil {
-		_ = send(err.Error())
+		send(err.Error())
 		return
 	}
 	defer func() {
 		var e *exec.ExitError
 		if err := cmd.Wait(); err != nil && !errors.As(err, &e) {
-			_ = send(err.Error())
+			send(err.Error())
 		}
 	}()
 	buf := make([]byte, 256)
 	for {
 		n, err := cmdReader.Read(buf)
 		if n > 0 {
-			_ = send(strings.Replace(string(buf[:n]), "\r\n", "\n", -1))
+			send(strings.Replace(string(buf[:n]), "\r\n", "\n", -1))
 		}
 		if err != nil {
 			if err != io.EOF {
-				_ = send(err.Error())
+				send(err.Error())
 			}
 			return
 		}

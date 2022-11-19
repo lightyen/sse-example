@@ -2,183 +2,121 @@ package sse
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 type EventService struct {
-	peerKeyFunc   func(c *gin.Context) string
-	sourceKeyFunc func(c *gin.Context) string
-	peers         *sync.Map // <key: string, value: *Peer>
+	getId   func(c *gin.Context) string
+	sources *EventSourceMap
 }
 
-func (s *EventService) Peer(c *gin.Context) *Peer {
-	if v, ok := s.peers.Load(s.peerKeyFunc(c)); ok {
-		if peer, ok := v.(*Peer); ok {
-			return peer
-		}
-	}
-	return nil
-}
-
-func (s *EventService) Source(c *gin.Context) *Source {
-	peer := s.Peer(c)
-	if peer == nil {
-		return nil
-	}
-	if v, ok := peer.sources.Load(s.sourceKeyFunc(c)); ok {
-		if s, ok := v.(*Source); ok {
-			return s
-		}
-	}
-	return nil
-}
-
-func (s *EventService) Send(key interface{}, e sse.Event) {
-	if v, ok := s.peers.Load(key); ok {
-		if peer, ok := v.(Sender); ok {
-			_ = peer.Send(e)
-		}
+func (srv *EventService) Send(key string, e *sse.Event) {
+	if v, exist := srv.sources.Load(key); exist {
+		v.Send(e)
 	}
 }
 
-func (s *EventService) Broadcast(e sse.Event) {
-	s.peers.Range(func(key, value interface{}) bool {
-		if peer, ok := value.(Sender); ok {
-			_ = peer.Send(e)
-		}
+func (srv *EventService) Broadcast(e *sse.Event) {
+	srv.sources.Range(func(k string, v *EventSource) bool {
+		v.Send(e)
 		return true
 	})
 }
 
-func (s *EventService) CloseAll() {
-	s.peers.Range(func(key, value interface{}) bool {
-		if peer, ok := value.(Sender); ok {
-			s.peers.Delete(key)
-			peer.Close()
-		}
+func (srv *EventService) FromContext(c *gin.Context) (*EventSource, bool) {
+	return srv.sources.Load(srv.getId(c))
+}
+
+func (srv *EventService) CloseAll() {
+	srv.sources.RangeAndDelete(func(k string, v *EventSource) bool {
+		v.Close()
 		return true
 	})
+}
+
+func randomId() string {
+	var buf [16]byte
+	_, err := io.ReadFull(rand.Reader, buf[:])
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf("%x", buf[:])
 }
 
 func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin) *EventService {
-	peerKeyFunc := func(c *gin.Context) string {
-		return c.GetHeader("X-Peer-ID")
-	}
-	sourceKeyFunc := func(c *gin.Context) string {
+	getId := func(c *gin.Context) string {
 		return c.GetHeader("Last-Event-ID")
 	}
 
-	s := &EventService{peerKeyFunc: peerKeyFunc, sourceKeyFunc: sourceKeyFunc, peers: &sync.Map{}}
+	srv := &EventService{getId: getId, sources: NewSourceMap()}
 
-	type PluginBuilder struct {
-		peer   func(p *Peer) PeerRunner
-		source func(s *Source) SourceRunner
-	}
-
-	createHandler := func(builders map[string]PluginBuilder) gin.HandlerFunc {
+	createHandler := func(builders []func(s *EventSource) PluginInstance) gin.HandlerFunc {
 		return func(c *gin.Context) {
 			if !strings.Contains(c.Request.Header.Get("Accept"), "text/event-stream") {
 				c.Status(http.StatusBadRequest)
 				return
 			}
 
-			peerKey := peerKeyFunc(c)
-			sourceKey := sourceKeyFunc(c)
-			if sourceKey == "" {
-				sourceKey = uuid.New().String()
+			id := getId(c)
+			if id == "" {
+				id = randomId()
 			}
 
-			ch := make(chan sse.Event, 1)
-			ctx, cancel := context.WithCancel(c)
-
-			var peer *Peer
-			var source *Source
+			ch := make(chan *sse.Event, 2)
+			cc, cancel := context.WithCancel(c)
+			defer cancel()
+			defer srv.sources.Delete(id)
 
 			go func() {
 				<-c.Writer.CloseNotify()
 				cancel()
-				if peer != nil {
-					peer.sources.Delete(sourceKey)
-				}
 			}()
 
-			defer func() {
-				source.Close()
-			}()
-
-			NewPeer := func() *Peer {
-				peer := &Peer{
-					key:       peerKey,
-					clientIP:  c.ClientIP(),
-					userAgent: c.GetHeader("User-Agent"),
-					sources:   &sync.Map{},
-					plugins:   map[string]PeerRunner{},
-					ctx:       ctx,
+			for {
+				if _, exists := srv.sources.Load(id); !exists {
+					break
 				}
-				for name, b := range builders {
-					if _, exists := peer.plugins[name]; exists {
-						panic("plugin name '" + name + "' is conflict")
-					}
-					if obj := b.peer(peer); obj != nil {
-						peer.plugins[name] = obj
-						go peer.plugins[name].Run(ctx, peer)
-					}
-				}
-				return peer
+				id = randomId()
 			}
 
-			NewSource := func() *Source {
-				source := &Source{
-					key:     sourceKey,
-					peer:    peer,
-					ch:      ch,
-					plugins: map[string]SourceRunner{},
-					ctx:     ctx,
-					cancel:  cancel,
+			s := &EventSource{
+				Context:         cc,
+				cancel:          cancel,
+				id:              id,
+				ch:              ch,
+				pluginInstances: make([]PluginInstance, 0),
+				userAgent:       c.GetHeader("User-Agent"),
+				clientIP:        c.ClientIP(),
+			}
+			defer s.Close()
+
+			for _, h := range builders {
+				if obj := h(s); obj != nil {
+					s.pluginInstances = append(s.pluginInstances, obj)
+					go obj.Run(s)
 				}
-				for name, b := range builders {
-					if _, exists := source.plugins[name]; exists {
-						panic("plugin name '" + name + "' is conflict")
-					}
-					if obj := b.source(source); obj != nil {
-						source.plugins[name] = obj
-						go source.plugins[name].Run(ctx, source)
-					}
-				}
-				return source
 			}
 
-			if p, ok := s.peers.Load(peerKey); ok {
-				peer = p.(*Peer)
-			} else {
-				peer = NewPeer()
-				s.peers.Store(peerKey, peer)
-			}
-
-			if _, ok := peer.sources.Load(sourceKey); ok {
-				panic("uuid collision")
-			}
-
-			source = NewSource()
-			peer.sources.Store(sourceKey, source)
+			srv.sources.Store(id, s)
 
 			w := c.Writer
 			header := w.Header()
 			header.Set("Cache-Control", "no-store")
 			header.Set("Content-Type", "text/event-stream")
 			header.Set("Connection", "keep-alive")
-			c.Render(http.StatusOK, sse.Event{Event: "establish", Retry: 3000, Id: sourceKey, Data: sourceKey})
+			c.Render(http.StatusOK, &sse.Event{Event: "establish", Retry: 3000, Id: id, Data: id})
 			w.Flush()
 
 			for {
 				select {
-				case <-ctx.Done():
+				case <-s.Done():
 					return
 				case e := <-ch:
 					c.Render(http.StatusOK, e)
@@ -188,26 +126,25 @@ func NewEventService(ctx context.Context, g *gin.RouterGroup, plugins ...Plugin)
 		}
 	}
 
-	m := map[string]PluginBuilder{}
+	instanceCreators := make([]func(s *EventSource) PluginInstance, 0)
 	for _, p := range plugins {
-		peer, source := p.Setup(s, g)
-		m[p.Name()] = PluginBuilder{peer, source}
-		go p.Serve(ctx)
+		instanceCreators = append(instanceCreators, p.Install(srv, g))
+		go p.Run(ctx)
 	}
 
-	g.GET("", createHandler(m))
-	g.GET("/peers", func(c *gin.Context) {
+	g.GET("/stream", createHandler(instanceCreators))
+	g.GET("/stream/sources", func(c *gin.Context) {
 		c.JSON(http.StatusOK, struct {
 			Data interface{} `json:"data"`
-		}{s.Peers()})
+		}{srv.Sources()})
 	})
-	g.GET("/sources", func(c *gin.Context) {
+	g.GET("/stream/sources/count", func(c *gin.Context) {
 		c.JSON(http.StatusOK, struct {
 			Data interface{} `json:"data"`
-		}{s.Sources()})
+		}{len(srv.Sources())})
 	})
 
-	return s
+	return srv
 }
 
 type PeerInfo struct {
@@ -217,35 +154,16 @@ type PeerInfo struct {
 	Sources   []string    `json:"sources"`
 }
 
-func (s *EventService) Peers() []PeerInfo {
-	items := []PeerInfo{}
-	sources := []string{}
-	s.peers.Range(func(key, value interface{}) bool {
-		peer, _ := value.(*Peer)
-		peer.sources.Range(func(key, value interface{}) bool {
-			source, _ := value.(*Source)
-			sources = append(sources, source.key.(string))
-			return true
-		})
-		items = append(items, PeerInfo{ID: peer.key, UserAgent: peer.userAgent, ClientIP: peer.clientIP, Sources: sources})
-		return true
-	})
-	return items
-}
-
 type SourceInfo struct {
-	ID interface{} `json:"id"`
+	ID        interface{} `json:"id"`
+	ClientIP  string      `json:"ip"`
+	UserAgent string      `json:"ua"`
 }
 
 func (s *EventService) Sources() []SourceInfo {
 	items := []SourceInfo{}
-	s.peers.Range(func(key, value interface{}) bool {
-		peer, _ := value.(*Peer)
-		peer.sources.Range(func(key, value interface{}) bool {
-			source, _ := value.(*Source)
-			items = append(items, SourceInfo{ID: source.key})
-			return true
-		})
+	s.sources.Range(func(k string, s *EventSource) bool {
+		items = append(items, SourceInfo{ID: s.id, ClientIP: s.clientIP, UserAgent: s.userAgent})
 		return true
 	})
 	return items
