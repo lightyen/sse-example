@@ -6,8 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
-	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,22 +27,16 @@ type Source struct {
 	Ch        chan Event
 	ClientIP  string
 	UserAgent string
-	Cancel    context.CancelFunc
 	context.Context
+	cancel context.CancelFunc
 }
 
 func (s *Source) Send(e Event) {
 	c, cancel := context.WithTimeout(s.Context, 10*time.Second)
 	defer cancel()
-	defer func() {
-		if c.Err() == context.DeadlineExceeded {
-			// client bug
-			s.Cancel()
-
-		}
-	}()
 	select {
 	case <-c.Done():
+		s.cancel()
 		return
 	case s.Ch <- e:
 		return
@@ -50,59 +44,60 @@ func (s *Source) Send(e Event) {
 }
 
 func (s *Source) Close() {
-	s.Cancel()
+	s.cancel()
 }
 
 type SourceMap struct {
-	m  map[string]*Source
-	mu *sync.RWMutex
+	*sync.RWMutex
+	m map[string]*Source
 }
 
 func NewSourceMap() *SourceMap {
-	return &SourceMap{m: make(map[string]*Source), mu: new(sync.RWMutex)}
+	return &SourceMap{RWMutex: new(sync.RWMutex), m: make(map[string]*Source)}
 }
 
-func (s *SourceMap) Load(c *gin.Context) (src *Source, exists bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	src, exists = s.m[SourceKeyFunc(c)]
+func (m *SourceMap) Load(c *gin.Context) (src *Source, exists bool) {
+	m.RLock()
+	defer m.RUnlock()
+	src, exists = m.m[SourceKeyFunc(c)]
 	return
 }
 
-func (s *SourceMap) Store(c *gin.Context, v *Source) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[SourceKeyFunc(c)] = v
+func (m *SourceMap) Store(c *gin.Context, v *Source) {
+	m.Lock()
+	defer m.Unlock()
+	m.m[SourceKeyFunc(c)] = v
 }
 
-func (s *SourceMap) Delete(c *gin.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.m, SourceKeyFunc(c))
+func (m *SourceMap) Delete(c *gin.Context) {
+	m.Lock()
+	defer m.Unlock()
+	delete(m.m, SourceKeyFunc(c))
 }
 
-func (s *SourceMap) Range(callback func(k string, v *Source) bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for k, v := range s.m {
-		if callback(k, v) == false {
+func (m *SourceMap) Range(callback func(s *Source) bool) {
+	m.RLock()
+	defer m.RUnlock()
+	for _, v := range m.m {
+		if callback(v) == false {
 			break
 		}
 	}
 }
 
-func (s *SourceMap) RangeAndDelete(callback func(k string, v *Source) bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for k, v := range s.m {
-		delete(s.m, k)
-		if callback(k, v) == false {
+func (m *SourceMap) RangeAndDelete(cb func(v *Source) bool) {
+	m.Lock()
+	defer m.Unlock()
+	for k, v := range m.m {
+		delete(m.m, k)
+		if cb(v) == false {
 			break
 		}
 	}
 }
 
 type Event = sse.Event
+
 type SourceOnStartup func(s *Source)
 
 type EventService struct {
@@ -117,10 +112,40 @@ var DefaultSourceKeyFunc = func(c *gin.Context) string {
 
 var SourceKeyFunc = DefaultSourceKeyFunc
 
+// Register register global source initializer
 func (s *EventService) Register(args ...SourceOnStartup) {
 	s.onstartupMutex.Lock()
 	defer s.onstartupMutex.Unlock()
 	s.onstartup = append(s.onstartup, args...)
+}
+
+func (s *EventService) Unregister(args ...SourceOnStartup) {
+	s.onstartupMutex.Lock()
+	defer s.onstartupMutex.Unlock()
+
+	var onstartup []reflect.Value
+	var targets []reflect.Value
+	for i := 0; i < len(s.onstartup); i++ {
+		onstartup = append(onstartup, reflect.ValueOf(s.onstartup[i]))
+	}
+	for j := 0; j < len(args); j++ {
+		targets = append(targets, reflect.ValueOf(args[j]))
+	}
+
+	var result []SourceOnStartup
+	for i := 0; i < len(onstartup); i++ {
+		var exists = false
+		for j := 0; j < len(targets); j++ {
+			if onstartup[i].Pointer() == targets[j].Pointer() {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			result = append(result, s.onstartup[i])
+		}
+	}
+	s.onstartup = result
 }
 
 func (s *EventService) Source(c *gin.Context) (src *Source, exists bool) {
@@ -135,14 +160,14 @@ func (s *EventService) Send(c *gin.Context, e Event) {
 }
 
 func (s *EventService) Broadcast(e Event) {
-	s.sources.Range(func(k string, v *Source) bool {
+	s.sources.Range(func(v *Source) bool {
 		v.Send(e)
 		return true
 	})
 }
 
 func (s *EventService) CloseAll() {
-	s.sources.RangeAndDelete(func(k string, v *Source) bool {
+	s.sources.RangeAndDelete(func(v *Source) bool {
 		v.Close()
 		return true
 	})
@@ -176,45 +201,41 @@ func randomId() []byte {
 	return b[:]
 }
 
-func NewEventSourceService() *EventService {
+func New() *EventService {
 	return &EventService{sources: NewSourceMap()}
 }
 
-func (s *EventService) StreamHandlerFunc(c *gin.Context) {
-	if !strings.Contains(c.Request.Header.Get("Accept"), "text/event-stream") {
-		c.Status(http.StatusBadRequest)
+func (s *EventService) Range(cb func(s *Source) bool) {
+	s.sources.Range(cb)
+}
+
+func (s *EventService) GinStreamHandler(ctx *gin.Context) {
+	if !strings.Contains(ctx.Request.Header.Get("Accept"), "text/event-stream") {
+		ctx.Status(400)
 		return
 	}
 
-	sourceKey := SourceKeyFunc(c)
+	sourceKey := SourceKeyFunc(ctx)
 	if sourceKey == "" {
 		sourceKey = hex.EncodeToString(randomId())
 	}
 
 	ch := make(chan Event, 1)
-	ctx, cancel := context.WithCancel(c)
+	c, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	go func() {
-		<-c.Writer.CloseNotify()
-		s.sources.mu.Lock()
-		delete(s.sources.m, sourceKey)
-		s.sources.mu.Unlock()
-		cancel()
-	}()
 
 	source := &Source{
 		ID:        sourceKey,
 		Ch:        ch,
-		Context:   ctx,
-		Cancel:    cancel,
-		ClientIP:  c.ClientIP(),
-		UserAgent: c.GetHeader("User-Agent"),
+		Context:   c,
+		cancel:    cancel,
+		ClientIP:  ctx.ClientIP(),
+		UserAgent: ctx.GetHeader("User-Agent"),
 	}
 
-	s.sources.mu.Lock()
+	s.sources.Lock()
 	s.sources.m[sourceKey] = source
-	s.sources.mu.Unlock()
+	s.sources.Unlock()
 
 	s.onstartupMutex.RLock()
 	for i := range s.onstartup {
@@ -222,37 +243,29 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 	}
 	s.onstartupMutex.RUnlock()
 
-	w := c.Writer
-	header := w.Header()
-	header.Set("Cache-Control", "no-store")
-	header.Set("Content-Type", "text/event-stream")
-	header.Set("Connection", "keep-alive")
-	c.Render(http.StatusOK, &Event{Event: "establish", Retry: 3000, Id: sourceKey, Data: sourceKey})
-	w.Flush()
+	go func() {
+		w := ctx.Writer
+		header := w.Header()
+		header.Set("Cache-Control", "no-store")
+		header.Set("Content-Type", "text/event-stream")
+		header.Set("Connection", "keep-alive")
+		ctx.Render(200, &Event{Event: "establish", Retry: 3000, Id: sourceKey, Data: sourceKey})
+		w.Flush()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case e := <-ch:
-			c.Render(http.StatusOK, e)
-			// NOTE: webpack-dev-server would not close the connection when the client is closed.
-			w.Flush()
+		for {
+			select {
+			case <-c.Done():
+				return
+			case evt := <-ch:
+				ctx.Render(200, evt)
+				w.Flush()
+			}
 		}
-	}
-}
+	}()
 
-type SourceInfo struct {
-	ID        interface{} `json:"id"`
-	ClientIP  string      `json:"ip"`
-	UserAgent string      `json:"ua"`
-}
-
-func (s *EventService) Sources() []*Source {
-	var items []*Source
-	s.sources.Range(func(k string, s *Source) bool {
-		items = append(items, s)
-		return true
-	})
-	return items
+	<-ctx.Writer.CloseNotify()
+	cancel()
+	s.sources.Lock()
+	defer s.sources.Unlock()
+	delete(s.sources.m, sourceKey)
 }

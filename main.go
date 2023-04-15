@@ -49,9 +49,10 @@ func fallback(filename string, allowAny bool) gin.HandlerFunc {
 }
 
 func run(ctx context.Context, g *gin.Engine) *sse.EventService {
-	e := sse.NewEventSourceService()
-	g.GET("/apis/stream", e.StreamHandlerFunc)
+	e := sse.New()
+	g.GET("/apis/stream", e.GinStreamHandler)
 
+	// customize
 	e.Register(func(s *sse.Source) {
 		cnt := 0
 		for {
@@ -66,8 +67,6 @@ func run(ctx context.Context, g *gin.Engine) *sse.EventService {
 			fmt.Println("my count", cnt)
 		}
 	})
-
-	// custom feature
 	{
 		var count int64
 		mu := &sync.RWMutex{}
@@ -117,15 +116,14 @@ func run(ctx context.Context, g *gin.Engine) *sse.EventService {
 
 func main() {
 	g := gin.Default()
-	g.NoRoute(noCacheFirstPage(), static.Serve("/", static.LocalFile("react-emotion/build", true)), fallback(filepath.Join("react-template/build", "index.html"), true))
+	g.NoRoute(noCacheFirstPage(), static.Serve("/", static.LocalFile("react-emotion/dist", true)), fallback(filepath.Join("react-template/dist", "index.html"), true))
 
 	ctx := context.Background()
 	e := run(ctx, g)
 
 	srv := http.Server{
-		Addr:         ":8080",
-		Handler:      g,
-		WriteTimeout: 0,
+		Addr:    ":8080",
+		Handler: g,
 	}
 
 	go func() {
@@ -143,7 +141,7 @@ func main() {
 	signal.Notify(stop, os.Interrupt)
 	<-stop
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	e.CloseAll()
