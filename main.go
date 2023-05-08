@@ -3,14 +3,11 @@ package main
 import (
 	"app/sse"
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-contrib/static"
@@ -49,69 +46,15 @@ func fallback(filename string, allowAny bool) gin.HandlerFunc {
 }
 
 func run(ctx context.Context, g *gin.Engine) *sse.EventService {
-	e := sse.New()
-	g.GET("/apis/stream", e.GinStreamHandler)
+	sseSrv := sse.New()
+	g.GET("/apis/stream", sseSrv.StreamHandlerFunc)
 
-	// customize
-	e.Register(func(s *sse.Source) {
-		cnt := 0
-		for {
-			select {
-			default:
-			case <-s.Done():
-				fmt.Println("I'm done.")
-				return
-			}
-			time.Sleep(time.Second)
-			cnt++
-			fmt.Println("my count", cnt)
-		}
-	})
+	p := sse.NewCountPlugin(ctx, sseSrv)
+	sseSrv.Register(p.OnConnected)
 	{
-		var count int64
-		mu := &sync.RWMutex{}
-		collection := sse.NewSourceMap()
-		go func() {
-			for {
-				select {
-				default:
-				case <-ctx.Done():
-					fmt.Println("app done.")
-					return
-				}
-
-				mu.Lock()
-				count++
-				e.Broadcast(sse.Event{Event: "timecount", Data: strconv.FormatInt(count, 10)})
-				mu.Unlock()
-
-				time.Sleep(time.Second)
-			}
-		}()
-		g.GET("/apis/timecount", func(c *gin.Context) {
-			s, exists := e.Source(c)
-			if !exists {
-				c.Status(http.StatusBadRequest)
-				return
-			}
-
-			if c.Query("enable") == "off" {
-				collection.Delete(c)
-				return
-			}
-
-			if _, exists := collection.Load(c); !exists {
-				collection.Store(c, s)
-			}
-
-			mu.RLock()
-			defer mu.RUnlock()
-			s.Send(sse.Event{Event: "timecount", Data: strconv.FormatInt(count, 10)})
-			c.Status(http.StatusOK)
-		})
+		g.GET("/apis/timecount", p.GetTimeCount(ctx, sseSrv))
 	}
-
-	return e
+	return sseSrv
 }
 
 func main() {
@@ -141,8 +84,8 @@ func main() {
 	signal.Notify(stop, os.Interrupt)
 	<-stop
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	e.CloseAll()
 	_ = srv.Shutdown(ctx)
