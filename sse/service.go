@@ -48,12 +48,12 @@ func (s *Source) Close() {
 }
 
 type SourceMap struct {
-	mu *sync.RWMutex
+	mu sync.RWMutex
 	m  map[string]*Source
 }
 
 func NewSourceMap() *SourceMap {
-	return &SourceMap{mu: new(sync.RWMutex), m: make(map[string]*Source)}
+	return &SourceMap{m: make(map[string]*Source)}
 }
 
 func (m *SourceMap) LoadWithKey(key string) (src *Source, exists bool) {
@@ -75,50 +75,37 @@ func (m *SourceMap) DeleteWithKey(key string) {
 	delete(m.m, key)
 }
 
-func (m *SourceMap) Range(callback func(*Source) bool) {
+func (m *SourceMap) Range(callback func(s *Source, delete func(*Source)) bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, v := range m.m {
-		if callback(v) == false {
+		deleteFunc := func(s *Source) {
+			delete(m.m, s.Key)
+		}
+		if callback(v, deleteFunc) == false {
 			break
 		}
 	}
 }
 
-func (m *SourceMap) RangeAndDelete(cb func(*Source) bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for k, v := range m.m {
-		delete(m.m, k)
-		if cb(v) == false {
-			break
-		}
-	}
+func (m *SourceMap) Store(s *Source) {
+	m.StoreWithKey(s.Key, s)
 }
 
-// Load with gin.Context
-func (m *SourceMap) Load(c *gin.Context) (src *Source, exists bool) {
+func (m *SourceMap) Delete(s *Source) {
+	m.DeleteWithKey(s.Key)
+}
+
+func (m *SourceMap) LoadWithGinContext(c *gin.Context) (src *Source, exists bool) {
 	return m.LoadWithKey(SourceKeyFunc(c))
 }
 
-// Store with gin.Context
-func (m *SourceMap) Store(c *gin.Context, v *Source) {
+func (m *SourceMap) StoreWithGinContext(c *gin.Context, v *Source) {
 	m.StoreWithKey(SourceKeyFunc(c), v)
 }
 
-// Delete with gin.Context
-func (m *SourceMap) Delete(c *gin.Context) {
+func (m *SourceMap) DeleteWithGinContext(c *gin.Context) {
 	m.DeleteWithKey(SourceKeyFunc(c))
-}
-
-type Event = sse.Event
-
-type OnSourceConnected func(s *Source)
-
-type EventService struct {
-	sources          *SourceMap
-	onconnedtedMutex sync.RWMutex
-	onconnected      []OnSourceConnected
 }
 
 var DefaultSourceKeyFunc = func(c *gin.Context) string {
@@ -127,31 +114,65 @@ var DefaultSourceKeyFunc = func(c *gin.Context) string {
 
 var SourceKeyFunc = DefaultSourceKeyFunc
 
-// Register register global source initializer
-func (s *EventService) Register(args ...OnSourceConnected) {
-	s.onconnedtedMutex.Lock()
-	defer s.onconnedtedMutex.Unlock()
-	s.onconnected = append(s.onconnected, args...)
+type Event = sse.Event
+
+type IOnSourceConnected interface {
+	OnSourceConnected(s *Source)
 }
 
-func (s *EventService) Unregister(args ...OnSourceConnected) {
+type EventService struct {
+	sources          *SourceMap
+	onconnedtedMutex sync.RWMutex
+	onconnected      []IOnSourceConnected
+}
+
+func New() *EventService {
+	return &EventService{sources: NewSourceMap()}
+}
+
+func (s *EventService) RegisterOnSourceConnected(handlers ...IOnSourceConnected) {
 	s.onconnedtedMutex.Lock()
 	defer s.onconnedtedMutex.Unlock()
 
-	var onstartup []reflect.Value
-	var targets []reflect.Value
+	var current []reflect.Type
 	for i := 0; i < len(s.onconnected); i++ {
-		onstartup = append(onstartup, reflect.ValueOf(s.onconnected[i]))
-	}
-	for j := 0; j < len(args); j++ {
-		targets = append(targets, reflect.ValueOf(args[j]))
+		current = append(current, reflect.TypeOf(s.onconnected[i]))
 	}
 
-	var result []OnSourceConnected
-	for i := 0; i < len(onstartup); i++ {
+	for i := 0; i < len(handlers); i++ {
+		var exists = false
+		t := reflect.TypeOf(handlers[i])
+		for j := 0; j < len(current); j++ {
+			if t.String() == current[j].String() {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			s.onconnected = append(s.onconnected, handlers[i])
+			current = append(current, t)
+		}
+	}
+}
+
+func (s *EventService) UnregisterOnSourceConnected(handlers ...IOnSourceConnected) {
+	s.onconnedtedMutex.Lock()
+	defer s.onconnedtedMutex.Unlock()
+
+	var current []reflect.Type
+	var targets []reflect.Type
+	for i := 0; i < len(s.onconnected); i++ {
+		current = append(current, reflect.TypeOf(s.onconnected[i]))
+	}
+	for j := 0; j < len(handlers); j++ {
+		targets = append(targets, reflect.TypeOf(handlers[j]))
+	}
+
+	var result []IOnSourceConnected
+	for i := 0; i < len(current); i++ {
 		var exists = false
 		for j := 0; j < len(targets); j++ {
-			if onstartup[i].Pointer() == targets[j].Pointer() {
+			if current[i].String() == targets[j].String() {
 				exists = true
 				break
 			}
@@ -163,27 +184,21 @@ func (s *EventService) Unregister(args ...OnSourceConnected) {
 	s.onconnected = result
 }
 
-func (s *EventService) Source(c *gin.Context) (src *Source, exists bool) {
-	return s.sources.Load(c)
-}
-
-func (s *EventService) Send(c *gin.Context, e Event) {
-	src, ok := s.Source(c)
-	if ok {
-		src.Send(e)
-	}
+func (s *EventService) LoadWithGinContext(c *gin.Context) (src *Source, exists bool) {
+	return s.sources.LoadWithGinContext(c)
 }
 
 func (s *EventService) Broadcast(e Event) {
-	s.sources.Range(func(v *Source) bool {
+	s.sources.Range(func(v *Source, delete func(*Source)) bool {
 		v.Send(e)
 		return true
 	})
 }
 
 func (s *EventService) CloseAll() {
-	s.sources.RangeAndDelete(func(v *Source) bool {
-		v.Close()
+	s.sources.Range(func(s *Source, delete func(*Source)) bool {
+		s.Close()
+		delete(s)
 		return true
 	})
 }
@@ -207,7 +222,7 @@ func randomUint32() uint32 {
 var counter = randomUint32()
 var pid = uint16(os.Getpid())
 
-func randomId() []byte {
+func randomID() []byte {
 	var b [16]byte
 	binary.BigEndian.PutUint32(b[0:], atomic.AddUint32(&counter, 1))
 	binary.BigEndian.PutUint16(b[4:], randomUint16())
@@ -216,11 +231,7 @@ func randomId() []byte {
 	return b[:]
 }
 
-func New() *EventService {
-	return &EventService{sources: NewSourceMap()}
-}
-
-func (s *EventService) Range(cb func(s *Source) bool) {
+func (s *EventService) Range(cb func(s *Source, delete func(*Source)) bool) {
 	s.sources.Range(cb)
 }
 
@@ -233,7 +244,7 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 
 	sourceKey := SourceKeyFunc(c)
 	if sourceKey == "" {
-		sourceKey = hex.EncodeToString(randomId())
+		sourceKey = hex.EncodeToString(randomID())
 	}
 
 	ch := make(chan Event, 1)
@@ -249,11 +260,11 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 		UserAgent: c.GetHeader("User-Agent"),
 	}
 
-	s.sources.StoreWithKey(sourceKey, source)
+	s.sources.Store(source)
 
 	s.onconnedtedMutex.RLock()
 	for i := range s.onconnected {
-		go s.onconnected[i](source)
+		go s.onconnected[i].OnSourceConnected(source)
 	}
 	s.onconnedtedMutex.RUnlock()
 
@@ -279,5 +290,5 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 
 	<-c.Writer.CloseNotify()
 	cancel()
-	s.sources.DeleteWithKey(sourceKey)
+	s.sources.Delete(source)
 }

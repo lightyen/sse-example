@@ -48,11 +48,10 @@ func fallback(filename string, allowAny bool) gin.HandlerFunc {
 func run(ctx context.Context, g *gin.Engine) *sse.EventService {
 	sseSrv := sse.New()
 	g.GET("/apis/stream", sseSrv.StreamHandlerFunc)
-
-	p := sse.NewCountPlugin(ctx, sseSrv)
-	sseSrv.Register(p.OnConnected)
 	{
-		g.GET("/apis/timecount", p.GetTimeCount(ctx, sseSrv))
+		p := sse.Count(ctx, sseSrv)
+		sseSrv.RegisterOnSourceConnected(p)
+		g.GET("/apis/timecount", p.GetTimeCount())
 	}
 	return sseSrv
 }
@@ -61,7 +60,8 @@ func main() {
 	g := gin.Default()
 	g.NoRoute(noCacheFirstPage(), static.Serve("/", static.LocalFile("react-emotion/dist", true)), fallback(filepath.Join("react-template/dist", "index.html"), true))
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	e := run(ctx, g)
 
 	srv := http.Server{
@@ -84,7 +84,6 @@ func main() {
 	signal.Notify(stop, os.Interrupt)
 	<-stop
 
-	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	e.CloseAll()
