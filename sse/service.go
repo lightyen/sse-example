@@ -1,13 +1,16 @@
 package sse
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,23 +26,22 @@ type Sender interface {
 }
 
 type Source struct {
-	Key       string
-	Ch        chan Event
-	ClientIP  string
-	UserAgent string
-	context.Context
-	cancel context.CancelFunc
+	Key             string     `json:"key"`
+	Ch              chan Event `json:"-"`
+	ClientIP        string     `json:"ip"`
+	UserAgent       string     `json:"agent"`
+	context.Context `json:"-"`
+	cancel          context.CancelFunc `json:"-"`
 }
 
 func (s *Source) Send(e Event) {
 	c, cancel := context.WithTimeout(s.Context, 10*time.Second)
 	defer cancel()
 	select {
+	case <-s.Done():
 	case <-c.Done():
 		s.cancel()
-		return
 	case s.Ch <- e:
-		return
 	}
 }
 
@@ -248,7 +250,8 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 	}
 
 	ch := make(chan Event, 1)
-	ctx, cancel := context.WithCancel(c)
+	requestCtx := c.Request.Context()
+	ctx, cancel := context.WithCancel(requestCtx)
 	defer cancel()
 
 	source := &Source{
@@ -269,6 +272,11 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 	s.onconnedtedMutex.RUnlock()
 
 	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				fmt.Printf("sse: %v\n\n%s\n", err, stack(3))
+			}
+		}()
 		w := c.Writer
 		header := w.Header()
 		header.Set("Cache-Control", "no-store")
@@ -288,7 +296,37 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 		}
 	}()
 
-	<-c.Writer.CloseNotify()
-	cancel()
+	select {
+	case <-requestCtx.Done():
+	case <-ctx.Done():
+	}
+
 	s.sources.Delete(source)
+}
+
+func (s *EventService) SourcesHandlerFunc(c *gin.Context) {
+	result := make([]*Source, 0)
+	s.sources.Range(func(s *Source, delete func(*Source)) bool {
+		result = append(result, s)
+		return true
+	})
+	c.JSON(200, struct {
+		Data []*Source `json:"data"`
+	}{result})
+}
+
+func stack(skip int) string {
+	const depth = 8
+	var pcs [depth]uintptr
+	n := runtime.Callers(skip, pcs[:])
+	s := runtime.CallersFrames(pcs[:n])
+	output := new(bytes.Buffer)
+	for {
+		f, hasMore := s.Next()
+		if !hasMore {
+			break
+		}
+		_, _ = fmt.Fprintf(output, "%s\n\t%s:%d\n", f.Function, f.File, f.Line)
+	}
+	return output.String()
 }

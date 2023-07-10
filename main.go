@@ -48,6 +48,7 @@ func fallback(filename string, allowAny bool) gin.HandlerFunc {
 func run(ctx context.Context, g *gin.Engine) *sse.EventService {
 	sseSrv := sse.New()
 	g.GET("/apis/stream", sseSrv.StreamHandlerFunc)
+	g.GET("/apis/stream/sources", sseSrv.SourcesHandlerFunc)
 	{
 		p := sse.Count(ctx, sseSrv)
 		sseSrv.RegisterOnSourceConnected(p)
