@@ -264,6 +264,7 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 	}
 
 	s.sources.Store(source)
+	defer s.sources.Delete(source)
 
 	s.onconnedtedMutex.RLock()
 	for i := range s.onconnected {
@@ -271,37 +272,28 @@ func (s *EventService) StreamHandlerFunc(c *gin.Context) {
 	}
 	s.onconnedtedMutex.RUnlock()
 
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				fmt.Printf("sse: %v\n\n%s\n", err, stack(3))
-			}
-		}()
-		w := c.Writer
-		header := w.Header()
-		header.Set("Cache-Control", "no-store")
-		header.Set("Content-Type", "text/event-stream")
-		header.Set("Connection", "keep-alive")
-		c.Render(200, &Event{Event: "establish", Retry: 3000, Id: sourceKey, Data: sourceKey})
-		w.Flush()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case evt := <-ch:
-				c.Render(200, evt)
-				w.Flush()
-			}
+	defer func() {
+		if err := recover(); err != nil {
+			// fmt.Printf("sse: %v\n\n%s\n", err, stack(3))
 		}
 	}()
+	w := c.Writer
+	header := w.Header()
+	header.Set("Cache-Control", "no-store")
+	header.Set("Content-Type", "text/event-stream")
+	header.Set("Connection", "keep-alive")
+	c.Render(200, &Event{Event: "establish", Retry: 3000, Id: sourceKey, Data: sourceKey})
+	w.Flush()
 
-	select {
-	case <-requestCtx.Done():
-	case <-ctx.Done():
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt := <-ch:
+			c.Render(200, evt)
+			w.Flush()
+		}
 	}
-
-	s.sources.Delete(source)
 }
 
 func (s *EventService) SourcesHandlerFunc(c *gin.Context) {
